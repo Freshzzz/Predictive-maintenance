@@ -1,0 +1,11 @@
+$ cd /workspace/shadcn-ui
+$ find /workspace -name "auto_data1.db" -type f 2>/dev/null
+
+$ sqlite3 /workspace/uploads/auto_data1.db ".schema"
+
+CREATE TABLE readings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp DATETIME NOT NULL, 'RPM' REAL, 'ENGINE_LOAD' REAL, 'COOLANT_TEMP' REAL, 'INTAKE_PRESSURE' REAL, 'SPEED' REAL, 'INTAKE_TEMP' REAL, 'MAF' REAL, 'FUEL_RAIL_PRESSURE_DIRECT' REAL, 'COMMANDED_EGR' REAL, 'EGR_ERROR' REAL, 'CONTROL_MODULE_VOLTAGE' REAL, 'GET_DTC' TEXT
+        );
+CREATE TABLE sqlite_sequence(name,seq);
+$ cp /workspace/uploads/auto_data1.db /workspace/shadcn-ui/public/auto_data1.db
+

@@ -1,0 +1,32 @@
+$ cd /workspace/shadcn-ui
+$ find /workspace -name "auto_data1.db" -type f 2>/dev/null
+
+$ sqlite3 /workspace/uploads/auto_data1.db ".schema"
+
+CREATE TABLE readings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp DATETIME NOT NULL, 'RPM' REAL, 'ENGINE_LOAD' REAL, 'COOLANT_TEMP' REAL, 'INTAKE_PRESSURE' REAL, 'SPEED' REAL, 'INTAKE_TEMP' REAL, 'MAF' REAL, 'FUEL_RAIL_PRESSURE_DIRECT' REAL, 'COMMANDED_EGR' REAL, 'EGR_ERROR' REAL, 'CONTROL_MODULE_VOLTAGE' REAL, 'GET_DTC' TEXT
+        );
+CREATE TABLE sqlite_sequence(name,seq);
+$ cp /workspace/uploads/auto_data1.db /workspace/shadcn-ui/public/auto_data1.db
+
+$ cd /workspace/shadcn-ui && pnpm add sql.js
+
+Progress: resolved 1, reused 0, downloaded 0, added 0
+Progress: resolved 1, reused 1, downloaded 0, added 0
+Progress: resolved 75, reused 75, downloaded 0, added 0
+Progress: resolved 405, reused 403, downloaded 0, added 0
+ WARN  1 deprecated subdependencies found: rollup-plugin-terser@7.0.2
+Packages: +1
++
+Progress: resolved 502, reused 428, downloaded 0, added 1, done
+
+dependencies:
++ sql.js 1.13.0
+
+Done in 5.5s
+$ cd /workspace/shadcn-ui && pnpm run lint
+
+
+> shadcnui@ lint /workspace/shadcn-ui
+> eslint --quiet ./src
+

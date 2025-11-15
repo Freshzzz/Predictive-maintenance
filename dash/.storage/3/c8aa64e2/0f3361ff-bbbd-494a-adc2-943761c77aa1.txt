@@ -1,0 +1,3 @@
+$ cd /workspace/shadcn-ui
+$ find /workspace -name "auto_data1.db" -type f 2>/dev/null
+

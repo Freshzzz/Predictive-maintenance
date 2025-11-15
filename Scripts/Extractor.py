@@ -55,7 +55,7 @@ command_queue = [
     obd.commands.GET_DTC
 ]
 
-db_file_name = "auto_data.db"
+db_file_name = r"C:\Users\giedr\Desktop\BD\dash\workspace\shadcn-ui\public\auto_data1.db"
 
 data_headers = [cmd.name for cmd in command_queue]
 
@@ -124,7 +124,7 @@ try:
         else:
              print(f"[{time.strftime('%H:%M:%S')}] Nėra ryšio su automobiliu (praleidžiamas DB įrašymas).")
              
-        time.sleep(5)
+        time.sleep(0.8)
     
 except(KeyboardInterrupt):
     exit()

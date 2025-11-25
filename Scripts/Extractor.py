@@ -1,44 +1,35 @@
 import obd
 import time
-import serial.serialutil
-import sqlite3
-import sys
+import datetime
+import json
+import ssl
+import paho.mqtt.client as mqtt
+import serial
 
 
-def sukurti_duomenu_baze(db_name, header_list):
-    try:
-        conn = sqlite3.connect(db_name)
-        c = conn.cursor()
+HOST = 'eu.thingsboard.cloud'
+TOKEN = 'wDqMhRLCdPpQxkmVoPGF'
+MQTT_PORT = 1883
+MQTT_TOPIC = "v1/devices/me/telemetry"
+
+client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+client.username_pw_set(TOKEN)
+
+def on_connect(client, userdata, flags, rc, properties):
+    if rc == 0:
+        print("[MQTT] Prisijungta prie ThingsBoard")
+    else:
+        print(f"[MQTT] Klaida jungiantis, kodas: {rc}")
         
-        column_definitions = [
-            "id INTEGER PRIMARY KEY AUTOINCREMENT",
-            "timestamp DATETIME NOT NULL"
-        ]
-        
-        for cmd_name in header_list:
-            if cmd_name == "GET_DTC":
-                column_definitions.append(f"'{cmd_name}' TEXT")
-            else:
-                column_definitions.append(f"'{cmd_name}' REAL")
-        
-        create_table_sql = f"""
-        CREATE TABLE IF NOT EXISTS readings (
-            {', '.join(column_definitions)}
-        );
-        """
-        
-        c.execute(create_table_sql)
-        
-        # 5 žingsnis: Išsaugojimas
-        conn.commit()
-        conn.close()
-        print("Duomenų bazės lentelė sėkmingai paruošta.")
-    
-    except sqlite3.Error as e:
-        # 5 žingsnis: Klaidų gaudymas
-        print(f"KLAIDA: Nepavyko sukurti SQLite lentelės: {e}")
-        print("Programa bus sustabdyta.")
-        sys.exit() # Svarbu sustoti, jei DB paruošimas nepavyko
+client.on_connect = on_connect
+
+try:
+    client.connect(HOST, MQTT_PORT, 60)
+    print("Prisijungta sekmingai")
+    client.loop_start()
+except Exception as e:
+    print(f"Nepavyko prisijungti: {e}")
+
 
 command_queue = [
     obd.commands.RPM,
@@ -55,77 +46,63 @@ command_queue = [
     obd.commands.GET_DTC
 ]
 
-db_file_name = r"C:\Users\giedr\Desktop\BD\dash\workspace\shadcn-ui\public\auto_data1.db"
 
 data_headers = [cmd.name for cmd in command_queue]
 
-sukurti_duomenu_baze(db_file_name, data_headers)
+laikas = datetime.datetime.now().isoformat()
+
+try:
+    connection = obd.OBD("COM5", baudrate=9600, fast=False)
+except Exception as e:
+    print(f"Klaida jungiantis prie OBD: {e}")
+    connection = None
+    
 
 try:
     while True:
-        info_dict = {}
-        connection = None
-        connection_successfull = False
-        try:
-        
-            connection = obd.OBD("COM5", baudrate=9600)
-        
-            if(connection.is_connected()):
-                print(f"[{time.strftime('%H:%M:%S')}] Prisijungta, skaitomi duomenys...")
-                connection_successfull = True
-                for cmd in command_queue:
-                    response = connection.query(cmd)
-                
-                    if response.value is not None:
-                        if cmd.name == "GET_DTC":
-                            print("GET_DTC")
-                        else:
-                            info_dict[cmd.name] = response.value.magnitude
-                    elif response.value is None:
-                        info_dict[cmd.name] = None
-        
-        except (serial.serialutil.SerialError, PermissionError) as e:
-            print(f"[{time.strftime('%H:%M:%S')}] COM Prievado klaida: {e}")
-            print("Patikrinkite, ar kita programa nenaudoja COM5.")
-        
-        except Exception as e:
-            print(f"[{time.strftime('%H:%M:%S')}] Įvyko netikėta klaida: {e}")
-        
-        finally:
-            if connection is not None and connection.is_connected():
-                connection.close()
-                print(f"[{time.strftime('%H:%M:%S')}] Ryšys uždarytas.")
-        
-        if connection_successfull is True:
+        if connection is None or not connection.is_connected():
+            print("Nera rysio su automobiliu")
             try:
-                row_data = [time.strftime("%Y-%m-%d %H:%M:%S")]
-            
-                for cmd_name in data_headers:
-                    row_data.append(info_dict.get(cmd_name))
-            
-                column_names = ['timestamp'] + data_headers
-                placeholders = ', '.join(['?'] * len(column_names))
+                connection = obd.OBD("COM5", baudrate=9600, fast=False)
+            except:
+                time.sleep(2)
+                continue
+        
+        info_dict = {}
+        
+        print(f"[{time.strftime('%H:%M:%S')}] Nuskaitomi duomenys")
+        
+        for cmd in command_queue:
+            try:
+                response = connection.query(cmd)
                 
-                sql_query = f"INSERT INTO readings ({', '.join(column_names)}) VALUES ({placeholders})"
-                
-                conn = sqlite3.connect(db_file_name)
-                c = conn.cursor()
-                c.execute(sql_query, row_data)
-                conn.commit()
-                conn.close()
-                
-                print(f"[{time.strftime('%H:%M:%S')}] Duomenys sėkmingai įrašyti į SQLite DB.")
-                
-            except sqlite3.Error as e:
-                print(f"[{time.strftime('%H:%M:%S')}] KLAIDA: Nepavyko įrašyti į SQLite: {e}")
+                if response.value is not None:
+                    if hasattr(response.value, 'magnitude'):
+                        info_dict[cmd.name] = response.value.magnitude
+                    else:
+                        info_dict[cmd.name] = response.value
+                else:
+                    pass
             except Exception as e:
-                print(f"[{time.strftime('%H:%M:%S')}] KLAIDA: Netikėta DB rašymo klaida: {e}")
+                print(f"Klaida nuskaitant {cmd.name}: {e}")
                 
-        else:
-             print(f"[{time.strftime('%H:%M:%S')}] Nėra ryšio su automobiliu (praleidžiamas DB įrašymas).")
-             
-        time.sleep(0.8)
-    
-except(KeyboardInterrupt):
-    exit()
+        
+        if info_dict:
+            try:
+                telemetry_payload = json.dumps(info_dict)
+                
+                client.publish(MQTT_TOPIC, telemetry_payload, qos=1)
+                
+                print(f"Duomenys issiusti: {info_dict}")
+            except Exception as e:
+                print(f"Klaida siunciant duomenis: {e}")
+                
+except KeyboardInterrupt:
+    print("Programa nutraukiama")
+    if connection:
+        connection.close()
+    client.loop_stop()
+    client.disconnect()
+    print("Programa isjungta")
+                
 

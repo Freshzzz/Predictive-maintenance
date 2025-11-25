@@ -61,30 +61,53 @@ except Exception as e:
 try:
     while True:
         if connection is None or not connection.is_connected():
-            print("Nera rysio su automobiliu")
+            print("Bandoma jungtis prie automobilio")
             try:
-                connection = obd.OBD("COM5", baudrate=9600, fast=False)
-            except:
-                time.sleep(2)
+                connection = obd.OBD("COM5", baudrate=9600, fast=False, timeout=4)
+                
+                if not connection_is_connected():
+                    print("Nepavyko prisijungti. Bus bandoma uz 3 sekundziu.")
+                    connection = None
+                    time.sleep(3)
+                    continue
+                else:
+                    print("Sekmingai prisijungta prie automobilio")
+            except Exception as e:
+                print(f"Klaida jungiantis prie OBD: {e}")
+                connection = None
+                time.sleep(3)
                 continue
         
         info_dict = {}
         
         print(f"[{time.strftime('%H:%M:%S')}] Nuskaitomi duomenys")
         
-        for cmd in command_queue:
-            try:
+        try:
+            if connection.status() == obd.OBDStatus.NOT_CONNECTED:
+                raise Exception("Nutruko rysys")
+            
+            for cmd in command_queue:
                 response = connection.query(cmd)
+                
+                if response is None:
+                    continue
                 
                 if response.value is not None:
                     if hasattr(response.value, 'magnitude'):
                         info_dict[cmd.name] = response.value.magnitude
                     else:
                         info_dict[cmd.name] = response.value
-                else:
-                    pass
-            except Exception as e:
-                print(f"Klaida nuskaitant {cmd.name}: {e}")
+                
+        except Exception as e:
+            print(f"Klaida nuskaitant duomenis: {e}")
+            print("Perkraunamas rysys")
+            try:
+                connection.close()
+            except:
+                pass
+            connection = None
+            time.sleep(2)
+            continue
                 
         
         if info_dict:
@@ -96,6 +119,11 @@ try:
                 print(f"Duomenys issiusti: {info_dict}")
             except Exception as e:
                 print(f"Klaida siunciant duomenis: {e}")
+        else:
+            print("Nerasti duomenys arba nutrukes rysys")
+            
+        
+        time.sleep(2)
                 
 except KeyboardInterrupt:
     print("Programa nutraukiama")

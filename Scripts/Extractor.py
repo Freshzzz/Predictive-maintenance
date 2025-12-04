@@ -111,16 +111,94 @@ try:
                 
         
         if info_dict:
+            critical_anomaly, critical_message = check_limits(info_dict)
+
+            current_ai_result = 0
+
+            if model is not None:
+                try:
+                    input_data = {}
+
+                    for feature in MODEL_FEATURES:
+                        input_data[feature] = info_dict.get(feature, 0)
+                    
+                    df_predict = pd.DataFrame([input_data])
+                    prediction = model.predict(df_predict)[0]
+
+                    if prediction == -1:
+                        current_ai_result = 1
+
+                except Exception as e:
+                    print(f"Klaida naudojant DI modeli: {e}")
+
+            ai_history.append(current_ai_result)
+            if len(ai_history) > HISTORY_SIZE:
+                ai_history.pop(0)
+
+            ai_score = sum(ai_history) / len(ai_history)
+
+            ai_final_anomaly = 1 if ai_score >= ANOMALY_THRESHOLD else 0
+
+            is_final_anomaly = critical_anomaly or ai_final_anomaly
+
+            if is_final_anomaly:
+                info_dict['Anomaly'] = 1
+
+                if critical_anomaly:
+                    info_dict['Anomaly_Type'] = "Critical"
+                    alert_msg = critical_message
+                else:
+                    info_dict['Anomaly_Type'] = "AI"
+                    
+                    suspect_text = ""
+                    max_deviation = 0
+                    
+                    for param, (mean, std) in TRAIN_STATS.items():
+                        curr_val = info_dict.get(param, 0)
+                        if std > 0:
+                            dev = abs(curr_val - mean) / std
+                            # Sumažinome ribą iki 1.5 (jautriau)
+                            if dev > 1.5 and dev > max_deviation:
+                                max_deviation = dev
+                                suspect_text = f"\n⚠️ Įtartina: {param} -> {int(curr_val)}"
+                    
+                    # --- 2. LOGINIAI SPĖJIMAI (Santykių analizė) ---
+                    # Jei Z-Score nieko nerado, bandome atspėti pagal logiką
+                    if suspect_text == "":
+                        rpm = info_dict.get('RPM', 0)
+                        speed = info_dict.get('SPEED', 0)
+                        load = info_dict.get('ENGINE_LOAD', 0)
+                        
+                        if rpm > 2500 and speed < 5:
+                            suspect_text = "\n⚠️ Aukštos apsukos stovint"
+                        elif load > 80 and speed < 5:
+                            suspect_text = "\n⚠️ Didelė apkrova stovint"
+                        elif rpm < 800 and speed > 60:
+                            suspect_text = "\n⚠️ Riedėjimas laisva pavara?"
+                        else:
+                            suspect_text = "\n(Neįprasta parametrų kombinacija)"
+
+                    alert_msg = f"🤖 DI aptiko anomaliją ({int(ai_score*100)}% tikimybė){suspect_text}"
+
+                current_time = time.time()
+                if current_time - last_alert_time > ALERT_COOLDOWN:
+                    full_alert_msg = (f"⚠️ DEMESIO ⚠️ \n\n"
+                                      f"{alert_msg} \n"
+                                      f"Laikas: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                    
+                    send_telegram_alert(full_alert_msg)
+                    last_alert_time = current_time
+            else:
+                info_dict['Anomaly'] = 0
+                info_dict['Anomaly_Type'] = "None"
+
             try:
                 telemetry_payload = json.dumps(info_dict)
-                
                 client.publish(MQTT_TOPIC, telemetry_payload, qos=1)
-                
-                print(f"Duomenys issiusti: {info_dict}")
+                print(f"Duomenys issiusti i TB: {info_dict['Anomaly']} | DI Istorija: {ai_history} | DI Balas: {int(ai_score*100)}%")
             except Exception as e:
-                print(f"Klaida siunciant duomenis: {e}")
-        else:
-            print("Nerasti duomenys arba nutrukes rysys")
+                print(f"Klaida siunciant duomenis i TB: {e}")
+                    
             
         
         time.sleep(2)

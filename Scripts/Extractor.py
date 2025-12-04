@@ -5,32 +5,55 @@ import json
 import ssl
 import paho.mqtt.client as mqtt
 import serial
+import socket
+import requests
+import joblib
+import pandas as pd
 
 
-HOST = 'eu.thingsboard.cloud'
-TOKEN = 'wDqMhRLCdPpQxkmVoPGF'
-MQTT_PORT = 1883
+# MQTT / ThingsBoard nustatymai
+TB_HOST = 'eu.thingsboard.cloud'
+TB_PORT = 1883
 MQTT_TOPIC = "v1/devices/me/telemetry"
 
-client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-client.username_pw_set(TOKEN)
+# OBD Nustatymai
+# OBD_PORT = "/dev/rfcomm0"
+OBD_PORT = "COM5"
 
-def on_connect(client, userdata, flags, rc, properties):
-    if rc == 0:
-        print("[MQTT] Prisijungta prie ThingsBoard")
-    else:
-        print(f"[MQTT] Klaida jungiantis, kodas: {rc}")
-        
-client.on_connect = on_connect
+# Telegram Nustatymai
+T_CHAT_ID = "5761356600"
 
+
+# Automobilio kritines ribos
+MAX_TEMP = 105 # Maksimali aušinimo skysčio temperatūra °C
+MIN_VOLTAGE = 11.5  # Minimali akumuliatoriaus įtampa V
+MAX_VOLTAGE = 15.2  # Maksimali akumuliatoriaus įtampa V
+MAX_RPM = 4500  # Maksimalios apsukos RPM
+MAX_MAF = 255  # Maksimalus oro srautas g/s
+MAX_FUEL_PRESSURE = 180000  # Maksimalus kuro slėgis kPa
+ALERT_COOLDOWN = 60
+last_alert_time = 0
+
+
+# DI Nustatymai
+MODEL_FILE = "automobilio_modelis.pkl"
+MODEL_FEATURES = ['RPM', 'ENGINE_LOAD', 'COOLANT_TEMP', 'INTAKE_PRESSURE', 'SPEED', 'INTAKE_TEMP', 'MAF', 'FUEL_RAIL_PRESSURE_DIRECT', 'CONTROL_MODULE_VOLTAGE']
+model = None
+
+HISTORY_SIZE = 10
+ANOMALY_THRESHOLD = 0.6
+ai_history = [0] * HISTORY_SIZE
+
+print("Prijungiamas DI Modelis...")
 try:
-    client.connect(HOST, MQTT_PORT, 60)
-    print("Prisijungta sekmingai")
-    client.loop_start()
+    model = joblib.load(MODEL_FILE)
+    print("DI Modelis sekmingai prijungtas")
 except Exception as e:
-    print(f"Nepavyko prisijungti: {e}")
+    print(f"Klaida prijungiant DI modelį: {e}")
+    model = None
 
 
+# OBD komandų sąrašas
 command_queue = [
     obd.commands.RPM,
     obd.commands.ENGINE_LOAD,
@@ -40,41 +63,115 @@ command_queue = [
     obd.commands.INTAKE_TEMP,
     obd.commands.MAF,
     obd.commands.FUEL_RAIL_PRESSURE_DIRECT,
-    obd.commands.COMMANDED_EGR,
-    obd.commands.EGR_ERROR,
     obd.commands.CONTROL_MODULE_VOLTAGE,
     obd.commands.GET_DTC
 ]
 
+# Mokymo duomenų statistika (vidurkiai ir standartiniai nuokrypiai)
+TRAIN_STATS = {
+    'RPM': (1584, 649),
+    'SPEED': (58, 40),
+    'ENGINE_LOAD': (40, 25),
+    'COOLANT_TEMP': (73, 20),
+    'INTAKE_PRESSURE': (104, 24),
+    'MAF': (26, 14),
+    'FUEL_RAIL_PRESSURE_DIRECT': (60308, 34337),
+    'CONTROL_MODULE_VOLTAGE': (13.9, 0.4)
+}
 
-data_headers = [cmd.name for cmd in command_queue]
+def check_limits(data):
+    temp = data.get('COOLANT_TEMP')
+    if temp is not None and temp > 105:
+        return True, f"Perkaites ausinimo skystis: {temp}°C"
+    
+    rpm = data.get('RPM')
+    if rpm is not None and rpm > MAX_RPM:
+        return True, f"Perdaug apsuku variklyje: {rpm} RPM"
+    
+    voltage = data.get('CONTROL_MODULE_VOLTAGE')
+    if rpm is not None and rpm > 500:
+        if voltage is not None and voltage < MIN_VOLTAGE:
+            return True, f"Per maza akumuliatoriaus itampa: {voltage} V"
+        if voltage is not None and voltage > MAX_VOLTAGE:
+            return True, f"Per didele akumuliatoriaus itampa: {voltage} V"
+    
+    maf = data.get('MAF')
+    if maf is not None and maf > MAX_MAF:
+        return True, f"Per didelis oro srautas i varikli: {maf} g/s"
+    
+    fuel_pressure = data.get('FUEL_RAIL_PRESSURE_DIRECT')
+    if fuel_pressure is not None and fuel_pressure > MAX_FUEL_PRESSURE:
+        return True, f"Per didelis kuro slėgis: {int(fuel_pressure/100)} Bar"
+    
+    return False, None
 
-laikas = datetime.datetime.now().isoformat()
+def wait_for_internet():
+    print("Laukiama interneto ryšio")
+    while True:
+        try:
+            socket.create_connection(("8.8.8.8", 53), timeout=3)
+            print("Internetas atsirado")
+            return
+        except OSError:
+            time.sleep(2)
+
+
+def on_connect(client, userdata, flags, rc, properties=None):
+    if rc == 0:
+        print("[MQTT] Prisijungta prie ThingsBoard")
+    else:
+        print(f"[MQTT] Klaida jungiantis, kodas: {rc}")
+
+
+def send_telegram_alert(message):
+    try:
+        url = f"https://api.telegram.org/bot{T_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": T_CHAT_ID,
+            "text": message,
+            "parse_mode": "Markdown"
+            }
+        requests.post(url, json=payload, timeout=2)
+        print(f"Zinute i telegram issiusta")
+    except Exception as e:
+        print(f"Nepavyko issiusti zinutes i telegram: {e}")
+        
+        
+def get_obd_connection():
+    print(f"Bandoma prisijungti prie automobilio")
+    try:
+        conn = obd.OBD(OBD_PORT, baudrate=9600, fast=False, timeout=4)
+        if conn.is_connected():
+            print("Sekmingai prisijungta prie automobilio")
+            return conn
+        else:
+            print("Prisijungti prie automobilio nepavyko")
+            return None
+    except Exception as e:
+        print(f"Klaida bandant prisijungti prie automobilio: {e}")
+        return None
+        
+
+client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+client.username_pw_set(TB_TOKEN)    
+client.on_connect = on_connect
+
+wait_for_internet()
 
 try:
-    connection = obd.OBD("COM5", baudrate=9600, fast=False)
+    client.connect(TB_HOST, TB_PORT, 60)
+    print("Prisijungta sekmingai")
+    client.loop_start()
 except Exception as e:
-    print(f"Klaida jungiantis prie OBD: {e}")
-    connection = None
-    
+    print(f"Nepavyko prisijungti prie serverio: {e}")
+
+connection = None
 
 try:
     while True:
         if connection is None or not connection.is_connected():
-            print("Bandoma jungtis prie automobilio")
-            try:
-                connection = obd.OBD("COM5", baudrate=9600, fast=False, timeout=4)
-                
-                if not connection_is_connected():
-                    print("Nepavyko prisijungti. Bus bandoma uz 3 sekundziu.")
-                    connection = None
-                    time.sleep(3)
-                    continue
-                else:
-                    print("Sekmingai prisijungta prie automobilio")
-            except Exception as e:
-                print(f"Klaida jungiantis prie OBD: {e}")
-                connection = None
+            connection = get_obd_connection()
+            if connection is None:
                 time.sleep(3)
                 continue
         

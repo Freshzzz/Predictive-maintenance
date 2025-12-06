@@ -28,7 +28,7 @@ T_CHAT_ID = "5761356600"
 MAX_TEMP = 105 # Maksimali aušinimo skysčio temperatūra °C
 MIN_VOLTAGE = 11.5  # Minimali akumuliatoriaus įtampa V
 MAX_VOLTAGE = 15.2  # Maksimali akumuliatoriaus įtampa V
-MAX_RPM = 4500  # Maksimalios apsukos RPM
+MAX_RPM = 4000  # Maksimalios apsukos RPM
 MAX_MAF = 255  # Maksimalus oro srautas g/s
 MAX_FUEL_PRESSURE = 180000  # Maksimalus kuro slėgis kPa
 ALERT_COOLDOWN = 60
@@ -89,11 +89,10 @@ def check_limits(data):
         return True, f"Perdaug apsuku variklyje: {rpm} RPM"
     
     voltage = data.get('CONTROL_MODULE_VOLTAGE')
-    if rpm is not None and rpm > 500:
-        if voltage is not None and voltage < MIN_VOLTAGE:
-            return True, f"Per maza akumuliatoriaus itampa: {voltage} V"
-        if voltage is not None and voltage > MAX_VOLTAGE:
-            return True, f"Per didele akumuliatoriaus itampa: {voltage} V"
+    if voltage is not None and voltage < MIN_VOLTAGE:
+        return True, f"Per maza akumuliatoriaus itampa: {voltage} V"
+    if voltage is not None and voltage > MAX_VOLTAGE:
+        return True, f"Per didele akumuliatoriaus itampa: {voltage} V"
     
     maf = data.get('MAF')
     if maf is not None and maf > MAX_MAF:
@@ -233,9 +232,7 @@ try:
                 ai_history.pop(0)
 
             ai_score = sum(ai_history) / len(ai_history)
-
             ai_final_anomaly = 1 if ai_score >= ANOMALY_THRESHOLD else 0
-
             is_final_anomaly = critical_anomaly or ai_final_anomaly
 
             if is_final_anomaly:
@@ -254,13 +251,10 @@ try:
                         curr_val = info_dict.get(param, 0)
                         if std > 0:
                             dev = abs(curr_val - mean) / std
-                            # Sumažinome ribą iki 1.5 (jautriau)
                             if dev > 1.5 and dev > max_deviation:
                                 max_deviation = dev
                                 suspect_text = f"\n⚠️ Įtartina: {param} -> {int(curr_val)}"
                     
-                    # --- 2. LOGINIAI SPĖJIMAI (Santykių analizė) ---
-                    # Jei Z-Score nieko nerado, bandome atspėti pagal logiką
                     if suspect_text == "":
                         rpm = info_dict.get('RPM', 0)
                         speed = info_dict.get('SPEED', 0)
